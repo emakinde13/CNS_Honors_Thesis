@@ -1,0 +1,87 @@
+### p45
+"""
+--- Convert the Specific Annotation Features into Bed Files ---
+awk '$3=="gene"' /Users/emmanuelmakinde/Documents/Data_Analysis/hnRNPD_Project/gencode.v32.annotation.gff3 \
+| convert2bed -i gff3 \
+> genes.bed
+
+awk '$3=="CDS"' /Users/emmanuelmakinde/Documents/Data_Analysis/hnRNPD_Project/gencode.v32.annotation.gff3 \
+| convert2bed -i gff \
+> cds.bed
+
+awk '$3=="three_prime_UTR"' /Users/emmanuelmakinde/Documents/Data_Analysis/hnRNPD_Project/gencode.v32.annotation.gff3 \
+| convert2bed -i gff \
+> utr3.bed
+
+awk '$3=="five_prime_UTR"' /Users/emmanuelmakinde/Documents/Data_Analysis/hnRNPD_Project/gencode.v32.annotation.gff3 \
+| convert2bed -i gff \
+> utr5.bed
+
+--- Perform Bedtools Intersection ---
+
+bedtools intersect -a p45_cluster.bed -b utr3.bed -wa -wb > p45_clusters_x_utr3.tsv
+bedtools intersect -a p45_cluster.bed -b utr5.bed -wa -wb > p45_clusters_x_utr5.tsv
+bedtools intersect -a p45_cluster.bed -b cds.bed -wa -wb > p45_clusters_x_cds.tsv
+bedtools intersect -a p45_cluster.bed -b genes.bed -wa -wb > p45_clusters_x_genes.tsv
+
+--- Check if any of the clusters map to multiple genes ---
+cut -f4 p45_clusters_x_genes.tsv | sort | uniq -c | sort -nr | head
+
+--- If there is cluster mapping to multiple genes, choose max. If equal mapping, remove cluster altogether ---
+bedtools intersect -a p45_cluster.bed -b genes.bed -wo > p45_clusters_x_genes_wo.tsv
+awk '
+{
+  id=$4; ov=$NF;
+  # track max overlap per cluster
+  if (!(id in max) || ov > max[id]) {
+    max[id]=ov;
+  }
+  rows[id]=rows[id] $0 "\n";
+}
+END {
+  # second pass through stored rows to count max-ties and print unique winners
+  for (id in rows) {
+    nmax=0; bestline="";
+    split(rows[id], lines, "\n");
+    for (i in lines) {
+      if (lines[i]=="") continue;
+      split(lines[i], f, "\t");
+      ov=f[length(f)];
+      if (ov == max[id]) { nmax++; bestline=lines[i]; }
+    }
+    if (nmax==1) print bestline;
+  }
+}
+' p45_clusters_x_genes_wo.tsv > p45_cluster_to_gene_unique.tsv
+
+--- Filter by Priority Code: 3' UTR > 5' UTR > CDS > Intron ---
+
+bedtools intersect -a p45_cluster.bed -b utr3.bed -wa > p45_x_utr3.tsv
+bedtools intersect -a p45_cluster.bed -b utr5.bed -wa > p45_x_utr5.tsv
+bedtools intersect -a p45_cluster.bed -b cds.bed  -wa > p45_x_cds.tsv
+
+cut -f4 p45_x_utr3.tsv | sort -u > p45_utr3_ids.txt
+cut -f4 p45_x_utr5.tsv | sort -u > p45_utr5_ids.txt
+cut -f4 p45_x_cds.tsv  | sort -u > p45_cds_ids.txt
+
+awk '
+BEGIN {
+  while ((getline < "p45_utr3_ids.txt") > 0) utr3[$1]=1;
+  while ((getline < "p45_utr5_ids.txt") > 0) utr5[$1]=1;
+  while ((getline < "p45_cds_ids.txt")  > 0) cds[$1]=1;
+}
+{
+  id=$4;
+  region="intron";
+  if (id in utr3) region="utr3";
+  else if (id in utr5) region="utr5";
+  else if (id in cds)  region="cds";
+  print $0 "\t" region;
+}
+' p45_cluster_to_gene_unique.tsv > p45_cluster_to_gene_region.tsv
+
+--- Check hit / regions ---
+awk '{print $NF}' p45_cluster_to_gene_region.tsv | sort | uniq -c
+
+"""
+
